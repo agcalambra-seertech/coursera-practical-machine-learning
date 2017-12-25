@@ -1,0 +1,167 @@
+---
+title: "Coursera - Practical Machine Learning Course Project"
+author: "Allister Alambra"
+date: "12/24/2017"
+output: html_document
+---
+
+## Executive Summary
+
+In this report, we studied the data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+The goal in this report was to predict the manner in which the participants did the exercise. We ran and studied various learning models, ultimately using the most accurate, Random Forests (*0.9940527*), for the validation dataset. [^1][^2]
+
+### Data Locations
+
+The training data for this project are available [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv).
+The test data are available [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv).
+The data for this project come from this [source](http://groupware.les.inf.puc-rio.br/har).
+
+## Loading and Cleaning the Data
+
+### Loading the Library
+```{r echo=TRUE, results='hide', message=FALSE, error=FALSE, warning=FALSE}
+library(caret)
+```
+
+### Retreving the Data
+```{r echo=TRUE}
+# Store data URLs and target filenames to variables
+trainingDataUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+trainingDataFileName <- './data/pml-training.csv'
+vaidationDataUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+vaidationDataFileName <- './data/pml-testing.csv'
+```
+```{r echo=FALSE, results='hide'}
+# Attempt to download the datasets if it's missing
+# If the datasets are present, load them up
+if (!file.exists(trainingDataFileName)) {
+  download.file(trainingDataUrl, destfile=trainingDataFileName, method="curl")
+}
+if (!file.exists(vaidationDataFileName)) {
+  download.file(vaidationDataUrl, destfile=vaidationDataFileName, method="curl")
+}
+```
+
+### Load the Datasets
+```{r echo=TRUE}
+# Assuming the files have been downloaded, we will now load the contents
+trainingData <- read.csv(trainingDataFileName, header=TRUE)
+validationData <- read.csv(vaidationDataFileName, header=TRUE)
+```
+
+At this point, we can also check up on the dimensions of the datasets. This generally gives us how much we might cutoff after data cleansing and sanitation.
+```{r echo=TRUE}
+data.frame( TRAINING_DIM=dim(trainingData), 
+            TESTING_DIM=dim(validationData), 
+            row.names=c('observations','columns'))
+```
+
+As part of due process, we prune out columns with NA values. We match relevant columns on our training data based on the columns that will be used on the validation set.
+```{r echo=TRUE, results='hide'}
+
+# Retrieve a boolean vector of legitimate non-NA columns
+na_columns <- sapply(colnames(validationData), function(x) all(is.na(validationData[,x])==TRUE))
+trainingData <- trainingData[, na_columns==FALSE]
+validationData <- validationData[, na_columns==FALSE]
+```
+
+Running *str(trainingData)* shows us that a handful of columns are unnecessary to our training. These include any columns that contain the strings 'window', 'timestamp', the 'user_name' column and the surrogate id column 'X'. We can also remove the 'problem_id' column in the testData.
+```{r echo=TRUE, results='hide'}
+strToRemove <- '^X$|timestamp|window|^user_name$|^problem_id$'
+trainingData <- trainingData[, !grepl(strToRemove, colnames(trainingData))]
+validationData <- validationData[, !grepl(strToRemove, colnames(validationData))]
+```
+
+### Slicing the Training Dataset
+
+We slice the training dataset into training and testing subsets, paritioned into 70% and 30%, respectively. We will duly set a seed in the spirit of reproducibile research.
+```{r echo=TRUE, results='hide'}
+set.seed(31415)
+trainingPartition <- createDataPartition(y=trainingData$classe, p=0.70, list=FALSE)
+trainingSlice <- trainingData[trainingPartition, ]
+testingSlice <- trainingData[-trainingPartition, ]
+```
+
+### Control Parameters
+
+As a rule of thumb, we need to address the computational nuances of the *train* function using *trainControl*. In this line of code, we use k-fold cross-validation with k-subset set to 5, one of the most used values.
+```{r echo=TRUE}
+trainControlCompute <- trainControl(method='cv', number = 5)
+```
+
+## Modeling[^3] and Model Assessments
+
+We go through various models following the discussed topics in the Cousera Practical Machine Learning Course. We will perform model assessment (out of sample error) for each of the models we will review.
+
+### Prediction with Trees
+
+Using the *rpart* method, we train a tree-based classifier. We use basic parameters and skip further tuning. Due to this, it's possible that we may overfit the data on the training set that we have.
+```{r echo=TRUE}
+trees <- train(classe ~ ., data=trainingSlice, trControl=trainControlCompute, method='rpart')
+```
+
+Model Accuracy: 
+```{r echo=TRUE}
+predictTrees <- predict(trees, newdata=testingSlice)
+confMatTrees <- confusionMatrix(predictTrees, testingSlice$classe)
+confMatTrees$overall[1]
+```
+
+### Prediction with Random Forests
+
+This particular ensemble model is popular as a better option over decision trees and classification. RFs are also known to avoid overfitting, unlike our previous decision tree model. We use the *rf* method on *train* and grow our RF with *ntree=100*.
+
+```{r echo=TRUE, results='hide'}
+randomForests <- train(classe ~ ., data=trainingSlice, trControl=trainControlCompute, method='rf', ntree=100)
+```
+
+Model Accuracy: 
+```{r echo=TRUE}
+predictRFs <- predict(randomForests, newdata=testingSlice)
+confMatRFs <- confusionMatrix(predictRFs, testingSlice$classe)
+confMatRFs$overall[1]
+```
+
+### Prediction with Boosting
+
+At this point, we can already see that random forests already have a near-perfect accuracy at *0.9940527*. However, let us see what boosting would give us - a known ensemble and classification alternative to random forests.
+```{r echo=TRUE, results='hide'}
+boosting <- train( classe ~ ., data=trainingSlice, trControl=trainControlCompute, method='gbm')
+```
+
+Model Accuracy: 
+```{r echo=TRUE}
+predictBoosting <- predict(boosting, newdata=testingSlice)
+confMatBoosting <- confusionMatrix(predictBoosting, testingSlice$classe)
+confMatBoosting$overall[1]
+```
+
+Unfortunately, it seems that the accuracy for boosting is less than our previous model, random forests, albeit only by a small degree.
+
+## Choosing a Model
+
+Based on the accuracies presented below side-by-side, it is quite obvious that **random forests** have the highest accuracy considering the out of sample error.
+```{r echo=TRUE}
+data.frame( TREES=confMatTrees$overall[1],
+            RANDOM_FORESTS=confMatRFs$overall[1],
+            BOOSTING=confMatBoosting$overall[1])
+```
+
+## Predicting Results on the Test Data
+
+We then predict the results based for the quiz using our *random forests* model.
+```{r echo=TRUE}
+targetPredictRFs <- predict(randomForests, newdata=validationData)
+targetPredictRFs
+```
+
+## Conclusion
+
+Using these answers, we were able to properly predict all the validation dataset observations and classify them correctly. In this particular scenario, random forests worked well due in part to circumstance, but mostly because of its capacity to limit overfitting by aggregating results from its smaller decision trees.
+
+[^1]: Coursera Practical Machine Learning - Week 4 Project. (n.d.). Retrieved December 24, 2017, from https://www.coursera.org/learn/practical-machine-learning/peer/R43St/prediction-assignment-writeup
+
+[^2]: HAR. (n.d.). Retrieved December 24, 2017, from http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har 
+
+[^3]: Kuhn, M. (2017, September 04). The caret Package. Retrieved December 24, 2017, from https://topepo.github.io/caret/available-models.html
